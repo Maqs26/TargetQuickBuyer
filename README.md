@@ -2,9 +2,10 @@
 
 A small local app for grabbing Pokémon products on Target the second they drop.
 
-Paste a target.com product link and hit **Buy now**. It clicks "Add to cart" in your own
-logged-in Chrome as soon as the button is live, confirms Target accepted it, and opens checkout.
-You place the order yourself.
+Paste a target.com product link and hit **Add** (or Enter). It's checked immediately: if it's
+available, it's added to your cart in your own logged-in Chrome and checkout opens in a side
+window on the right of your screen. You place the order yourself. If it isn't available yet, it's
+saved and tracked.
 
 Saved links get a live badge (**LIVE** / Sold out / Coming soon) from a background stock checker,
 so you can see at a glance what's buyable.
@@ -30,11 +31,15 @@ pwsh bin/Debug/net8.0/playwright.ps1 install chrome
 1. Click **Log in to Target** (bottom of the big card). A separate Chrome window opens with its
    own profile. Log in, and make sure a default shipping address and card are saved. The profile
    lives in `./chrome-profile` (git-ignored), so you only do this once.
-2. Paste a product link (copy it from the product page's address bar):
-   - **Buy now**: goes for the cart immediately. If it isn't live yet, it keeps refreshing until it
-     is, for up to the "Keep trying" window in Drop settings (default 90 min).
-   - **or just save it and track stock**: adds it to **Saved products**, where the stock checker
-     keeps its badge up to date.
+2. Paste a product link (copy it from the product page's address bar) and hit **Add**:
+   - Available → straight into your cart, checkout opens in a side window.
+   - Not available → saved under **Saved products** with a Sold out / Coming soon badge. Tick
+     *"If it's not live yet, add it to cart automatically when it goes live"* under the box to have
+     the stock checker grab it the moment it flips.
+   - **Keep refreshing it nonstop (drop mode)** hammers that one product every few seconds until
+     it's live, for up to the "Keep trying" window in Drop settings (default 90 min).
+   - Keep Drop Desk's Chrome open (log in once) so adds are instant; the very first add otherwise
+     has to launch Chrome.
 3. Optional: in **Drop settings**, add an ntfy topic for phone alerts (install the free ntfy app and
    subscribe to the same name).
 4. Test it with something cheap that's in stock: **Buy now** should add it and open checkout.
@@ -44,8 +49,8 @@ pwsh bin/Debug/net8.0/playwright.ps1 install chrome
 - Checks every saved product every 2 minutes (change it in Drop settings, 0 = off) **while Drop
   Desk's Chrome is open**. It never pops Chrome open on its own. **Check stock now** opens it.
 - When something flips to **LIVE**, the card glows, you get a chime, a desktop notification and a
-  phone push. Tick *"When a saved product goes live, add it to cart automatically"* to have it go
-  straight for the cart.
+  phone push. With auto-add ticked it clicks Add to cart right on the page it just checked and
+  opens checkout in the side window.
 - Products a watch is already refreshing are skipped by the checker.
 
 ## Drop night

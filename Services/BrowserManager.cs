@@ -31,6 +31,56 @@ public class BrowserManager : IAsyncDisposable
         return p;
     }
 
+    /// <summary>
+    /// Opens a separate Chrome window snapped to the right side of the screen (for checkout).
+    /// Falls back to an ordinary new tab if Chrome won't hand out a window.
+    /// </summary>
+    public async Task<IPage> OpenSideWindowAsync()
+    {
+        var ctx = await GetContextAsync();
+        var opener = ctx.Pages.FirstOrDefault(p => !p.IsClosed) ?? await ctx.NewPageAsync();
+        try
+        {
+            var cdp = await ctx.NewCDPSessionAsync(opener);
+            var screen = await opener.EvaluateAsync<int[]>(
+                "() => [screen.availLeft || 0, screen.availTop || 0, screen.availWidth, screen.availHeight]");
+            int left = screen[0], top = screen[1], sw = screen[2], sh = screen[3];
+            var width = Math.Clamp(sw * 45 / 100, 520, Math.Max(520, sw));
+
+            var newPage = ctx.WaitForPageAsync(new() { Timeout = 5000 });
+            var created = await cdp.SendAsync("Target.createTarget", new Dictionary<string, object>
+            {
+                ["url"] = "about:blank",
+                ["newWindow"] = true,
+            });
+            var page = await newPage;
+
+            var targetId = created?.GetProperty("targetId").GetString();
+            if (targetId is not null)
+            {
+                var win = await cdp.SendAsync("Browser.getWindowForTarget", new Dictionary<string, object> { ["targetId"] = targetId });
+                var windowId = win!.Value.GetProperty("windowId").GetInt32();
+                await cdp.SendAsync("Browser.setWindowBounds", new Dictionary<string, object>
+                {
+                    ["windowId"] = windowId,
+                    ["bounds"] = new Dictionary<string, object>
+                    {
+                        ["left"] = left + sw - width,
+                        ["top"] = top,
+                        ["width"] = width,
+                        ["height"] = sh,
+                    },
+                });
+            }
+            await cdp.DetachAsync();
+            return page;
+        }
+        catch
+        {
+            return await ctx.NewPageAsync();
+        }
+    }
+
     public async Task<IBrowserContext> GetContextAsync()
     {
         await _lock.WaitAsync();

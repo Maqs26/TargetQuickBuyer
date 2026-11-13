@@ -106,13 +106,21 @@ public class StockChecker : BackgroundService
                 return false;
             }
 
-            await _watcher.ReadDetailsAsync(page, item);
-            var (state, _) = await DropWatcher.ProbeAsync(page, TimeSpan.FromSeconds(6), stop);
-            if (!_watcher.SetStock(item, state)) return true;
+            var (state, button) = await DropWatcher.ProbeAsync(page, TimeSpan.FromSeconds(6), stop);
+            var justWentLive = _watcher.SetStock(item, state);
 
-            // It just went live.
-            _watcher.AnnounceLive(item);
-            if (_watcher.Settings.AutoBuyWhenLive) _watcher.BuyNow(item);
+            if (justWentLive)
+            {
+                _watcher.AnnounceLive(item);
+                // Auto-add: click on this page right now; if Target balks, fall back to a nonstop watch.
+                if (_watcher.Settings.AutoBuyWhenLive && !_watcher.IsActive(item))
+                {
+                    var added = button is not null && await _watcher.BuyOnPageAsync(page, item, button);
+                    if (!added) _watcher.BuyNow(item);
+                }
+            }
+
+            await _watcher.ReadDetailsAsync(page, item);
         }
         catch (PlaywrightException) when (page.IsClosed)
         {

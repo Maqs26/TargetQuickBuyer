@@ -32,7 +32,7 @@
         {
             <div class="win" role="status">
                 <strong>In your cart: @win.Label</strong>
-                <span>@(win.Note ?? "Checkout is open in Chrome. Finish it there, fast.")</span>
+                <span>@(win.Note ?? "Checkout is open in the side window. Finish it there, fast.")</span>
             </div>
         }
 
@@ -41,13 +41,17 @@
             <div class="attack-cost" aria-hidden="true"><span class="energy energy-lightning"></span></div>
             <div class="attack-body">
                 <h2>Quick Buy</h2>
-                <p>Paste a Pokémon product link from target.com. It adds to cart the instant it's live, then opens checkout.</p>
+                <p>Paste a Pokémon product link from target.com. If it's available it goes straight into your cart and checkout opens in a side window. If not, it's saved and tracked.</p>
                 <div class="add-row">
                     <input type="text" inputmode="url" placeholder="https://www.target.com/p/…/-/A-12345678" aria-label="Product link"
                            @bind="newUrl" @bind:event="oninput" @onkeydown="OnKey" autofocus />
-                    <button class="btn primary" @onclick="BuyNow">Buy now</button>
+                    <button class="btn primary" @onclick="AddAndGrab">Add</button>
                 </div>
-                <button class="link" @onclick="AddOnly">or just save it and track stock</button>
+                <label class="inline-check">
+                    <input type="checkbox" @bind="S.AutoBuyWhenLive" @bind:after="Watcher.SaveSettings" />
+                    If it's not live yet, add it to cart automatically when it goes live
+                </label>
+                <button class="link" @onclick="KeepTrying">or keep refreshing it nonstop until it's live (drop mode)</button>
                 @if (addError is not null)
                 {
                     <p class="error">@addError</p>
@@ -136,7 +140,8 @@
                                 <span class="pill">@StatusText(item.Status)</span>
                                 @if (item.Status != ItemStatus.Added && !active)
                                 {
-                                    <button class="btn small primary" @onclick="() => BuyItem(item)">Buy now</button>
+                                    <button class="btn small primary" @onclick="() => BuyItem(item)"
+                                            title="Refresh this product nonstop and add it to cart the moment it's live">@(item.Stock == StockState.Live ? "Buy now" : "Keep trying")</button>
                                 }
                             </div>
                         </li>
@@ -172,10 +177,6 @@
                 <label>
                     Check stock every (minutes, 0 = off)
                     <input type="number" min="0" max="120" @bind="S.StockCheckMinutes" @bind:after="Watcher.SaveSettings" />
-                </label>
-                <label class="check">
-                    <input type="checkbox" @bind="S.AutoBuyWhenLive" @bind:after="Watcher.SaveSettings" />
-                    When a saved product goes live, add it to cart automatically
                 </label>
                 <label class="check">
                     <input type="checkbox" @bind="S.OpenCheckout" @bind:after="Watcher.SaveSettings" />
@@ -271,18 +272,19 @@
         _ => "Not checked"
     };
 
-    private async Task BuyNow()
+    private async Task AddAndGrab()
+    {
+        if (string.IsNullOrWhiteSpace(newUrl)) { addError = "Paste a product link first."; return; }
+        await UnlockSound();
+        addError = Watcher.AddAndGrab(newUrl);
+        if (addError is null) newUrl = "";
+    }
+
+    private async Task KeepTrying()
     {
         if (string.IsNullOrWhiteSpace(newUrl)) { addError = "Paste a product link first."; return; }
         await UnlockSound();
         addError = Watcher.BuyNow(newUrl);
-        if (addError is null) newUrl = "";
-    }
-
-    private void AddOnly()
-    {
-        if (string.IsNullOrWhiteSpace(newUrl)) { addError = "Paste a product link first."; return; }
-        addError = Watcher.AddItem(newUrl).error;
         if (addError is null) newUrl = "";
     }
 
@@ -304,7 +306,7 @@
 
     private async Task OnKey(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter") await BuyNow();
+        if (e.Key == "Enter") await AddAndGrab();
     }
 
     private string StageText => Watcher.Mode switch
@@ -351,7 +353,7 @@
                 WatcherMode.Watching =>
                     $"Left before it gives up. Checking {pending} product{plural} every ~{S.RefreshSeconds}s.",
                 _ => items.Count == 0
-                    ? "Paste a link below to get started."
+                    ? "Paste a product link below to get started."
                     : "Next drop time. Arm it, or hit Buy now on any card."
             };
         }

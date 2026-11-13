@@ -108,8 +108,32 @@ public class DropWatcher
     // ---------- start / stop ----------
 
     /// <summary>
-    /// The one-click path: paste a link, and it goes for the cart right now. If the item
-    /// isn't live yet it keeps refreshing until it is (or the give-up window ends).
+    /// The main path: paste a link and it's checked immediately. Available? It goes straight
+    /// into your cart and checkout opens in a side window. Not available? It stays saved with
+    /// its stock badge, and the stock checker alerts you (or auto-adds) when it goes live.
+    /// </summary>
+    public string? AddAndGrab(string raw)
+    {
+        var (item, error) = AddItem(raw);
+        if (item is null) return error;
+        if (item.Status == ItemStatus.Added) item.Status = ItemStatus.Waiting;
+
+        lock (_runSync)
+        {
+            if (Mode != WatcherMode.Idle)
+            {
+                // A watch is already refreshing; this product just joins its next pass.
+                if (_active.Add(item.Id)) { item.Status = ItemStatus.Waiting; item.Checks = 0; item.Note = null; }
+                if (Mode == WatcherMode.Armed) StartsAt = DateTime.Now;
+                return null;
+            }
+        }
+        Start(watchNow: true, only: new[] { item }, oneShot: true);
+        return null;
+    }
+
+    /// <summary>
+    /// Keep trying: refreshes this product until it's live (or the give-up window ends).
     /// If a watch is already running, the item simply joins it.
     /// </summary>
     public string? BuyNow(string raw)
@@ -142,7 +166,7 @@ public class DropWatcher
         Start(watchNow: true, only: new[] { item });
     }
 
-    public void Start(bool watchNow, IEnumerable<WatchItem>? only = null)
+    public void Start(bool watchNow, IEnumerable<WatchItem>? only = null, bool oneShot = false)
     {
         var targets = (only ?? Items).ToList();
         if (targets.Count == 0) return;
@@ -177,17 +201,23 @@ public class DropWatcher
             GiveUpAt = DropAt.AddMinutes(Math.Max(1, Settings.GiveUpAfterMinutes));
 
             _cts = new CancellationTokenSource();
+            _oneShot = oneShot;
             Mode = WatcherMode.Armed;
         }
 
-        AddLog(watchNow
-            ? (targets.Count == 1 ? $"Going for {targets[0].Label}" : $"Watching {targets.Count} products now")
-            : $"Armed for {DropAt:ddd h:mm tt}");
+        AddLog(oneShot
+            ? $"Checking {targets[0].Label}"
+            : watchNow
+                ? (targets.Count == 1 ? $"Going for {targets[0].Label}" : $"Watching {targets.Count} products now")
+                : $"Armed for {DropAt:ddd h:mm tt}");
         var token = _cts.Token;
         _ = Task.Run(() => RunAsync(token));
     }
 
     public void Stop() => _cts?.Cancel();
+
+    /// <summary>True for a single check (adding a link); false for a keep-refreshing watch.</summary>
+    private bool _oneShot;
 
     // ---------- the loop ----------
 
@@ -201,6 +231,7 @@ public class DropWatcher
     {
         IPage? page = null;
         var anyAdded = false;
+        var tried = new HashSet<string>(); // one-shot: every product gets exactly one look
         try
         {
             // Sleep in short chunks so a laptop that dozed off still wakes on time,
@@ -228,6 +259,7 @@ public class DropWatcher
                 {
                     ct.ThrowIfCancellationRequested();
                     if (item.Status == ItemStatus.Added || !Pending().Contains(item)) continue; // removed mid-run
+                    if (_oneShot && !tried.Add(item.Id)) continue;
 
                     var started = Stopwatch.StartNew();
                     page = await EnsureWatchPageAsync(page);
@@ -246,15 +278,26 @@ public class DropWatcher
                         continue;
                     }
 
+                    if (_oneShot) continue; // single look: no refresh delay
+
                     // Refresh delay is measured from the start of this check, so slow page loads
                     // don't stretch the cycle. Spread evenly across the list.
                     var perItem = Math.Max(2.0, Settings.RefreshSeconds) / Math.Max(1, pending.Count);
                     var wait = TimeSpan.FromSeconds(Math.Max(1.0, perItem)) - started.Elapsed;
                     if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
                 }
+
+                // One-shot ends once every product (including ones added mid-check) has had its look.
+                if (_oneShot && Pending().All(i => tried.Contains(i.Id))) break;
             }
 
-            if (Pending().Count > 0)
+            if (_oneShot)
+            {
+                foreach (var i in Pending())
+                    AddLog($"Not available yet: {i.Label} ({StockWord(i.Stock)}). Saved; "
+                        + (Settings.AutoBuyWhenLive ? "it'll be added to your cart when it goes live." : "you'll get an alert when it goes live."));
+            }
+            else if (Pending().Count > 0)
             {
                 AddLog("Watch window ended before everything went live");
                 await PushAsync("Drop window closed. Not everything went live.");
@@ -312,9 +355,7 @@ public class DropWatcher
                 return AttemptResult.RateLimited;
             }
 
-            // Pick up the real product name, price and picture the first time we see the page.
-            if (item.ImageUrl is null || item.Label.StartsWith("Item ", StringComparison.Ordinal))
-                await ReadDetailsAsync(page, item);
+            var needDetails = item.ImageUrl is null || item.Label.StartsWith("Item ", StringComparison.Ordinal);
 
             // Wait for the buy box to render and the button to enable, polling quickly so a live
             // button is clicked within ~150ms of appearing. Give up after a few seconds: not live.
@@ -324,12 +365,16 @@ public class DropWatcher
             {
                 item.Status = ItemStatus.NotLive;
                 item.Note = null;
+                if (needDetails) await ReadDetailsAsync(page, item);
                 Raise();
                 return AttemptResult.NotLive;
             }
 
+            // Live: start opening the checkout side window while the add-to-cart request is in flight.
+            var window = EnsureCheckoutWindowAsync();
             var (ok, note) = await ClickAndConfirmAsync(page, btn);
             item.Note = note;
+            if (needDetails) await ReadDetailsAsync(page, item); // after the click, never before
             if (!ok)
             {
                 item.Status = ItemStatus.NotLive;
@@ -337,6 +382,7 @@ public class DropWatcher
                 Raise();
                 return AttemptResult.NotLive;
             }
+            try { await window; } catch { /* OnAddedAsync retries */ }
             return AttemptResult.Added;
         }
         catch (OperationCanceledException) { throw; }
@@ -514,17 +560,13 @@ public class DropWatcher
             for (var i = 0; i < 6; i++) { Console.Beep(1200, 250); Thread.Sleep(150); }
         });
 
-        // Reuse one checkout tab: if several items land, it just reloads with the fuller cart.
+        // One checkout side window: if several items land, it just reloads with the fuller cart.
         try
         {
             var url = Settings.OpenCheckout ? "https://www.target.com/checkout" : "https://www.target.com/cart";
-            if (_checkoutPage is not { IsClosed: false })
-            {
-                var ctx = await _browser.GetContextAsync();
-                _checkoutPage = await ctx.NewPageAsync();
-            }
-            await _checkoutPage.BringToFrontAsync();
-            await _checkoutPage.GotoAsync(url, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
+            var checkout = await EnsureCheckoutWindowAsync();
+            await checkout.BringToFrontAsync();
+            await checkout.GotoAsync(url, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 20000 });
         }
         catch (Exception e)
         {
@@ -532,7 +574,47 @@ public class DropWatcher
         }
     }
 
+    /// <summary>
+    /// Used by the stock checker: the product is live on the page it already has open, so click
+    /// right there instead of reloading. Returns false if Target refused the add.
+    /// </summary>
+    internal async Task<bool> BuyOnPageAsync(IPage page, WatchItem item, ILocator button)
+    {
+        var window = EnsureCheckoutWindowAsync();
+        var (ok, note) = await ClickAndConfirmAsync(page, button);
+        item.Note = note;
+        if (!ok)
+        {
+            if (note is not null) AddLog($"{item.Label}: {note}");
+            Raise();
+            return false;
+        }
+        try { await window; } catch { }
+        await OnAddedAsync(item);
+        return true;
+    }
+
     private IPage? _checkoutPage;
+    private Task<IPage>? _checkoutOpening;
+    private readonly object _checkoutSync = new();
+
+    /// <summary>The checkout side window: reused while it's open, opened (once) when it isn't.</summary>
+    private Task<IPage> EnsureCheckoutWindowAsync()
+    {
+        lock (_checkoutSync)
+        {
+            if (_checkoutPage is { IsClosed: false }) return Task.FromResult(_checkoutPage);
+            if (_checkoutOpening is { IsCompleted: false }) return _checkoutOpening;
+            return _checkoutOpening = OpenAsync();
+        }
+
+        async Task<IPage> OpenAsync()
+        {
+            var p = await _browser.OpenSideWindowAsync();
+            lock (_checkoutSync) _checkoutPage = p;
+            return p;
+        }
+    }
 
     // ---------- helpers ----------
 
@@ -568,6 +650,13 @@ public class DropWatcher
     }
 
     private void Raise() => Changed?.Invoke();
+
+    private static string StockWord(StockState s) => s switch
+    {
+        StockState.SoldOut => "sold out",
+        StockState.ComingSoon => "coming soon",
+        _ => "no Add to cart button",
+    };
 
     private static string FirstLine(Exception e) => e.Message.Split('\n')[0].Trim();
 

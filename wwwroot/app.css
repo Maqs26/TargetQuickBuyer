@@ -480,3 +480,6 @@ input:focus-visible { border-color: var(--frame); outline-offset: 0; }
 @media (prefers-reduced-motion: reduce) {
   .mini-card.stock-live { animation: none; box-shadow: 0 0 0 3px rgba(67, 196, 99, .7); }
 }
+
+.inline-check { display: flex; align-items: center; gap: .5rem; margin: .1rem 0 .45rem; font-size: .88rem; color: var(--card-ink); cursor: pointer; }
+.inline-check input { width: 1.05rem; height: 1.05rem; accent-color: #e8392e; flex: none; color-scheme: light; }
