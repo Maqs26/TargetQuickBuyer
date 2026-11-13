@@ -2,68 +2,143 @@
 @implements IDisposable
 @inject DropWatcher Watcher
 @inject BrowserManager Browser
+@inject StockChecker Stock
 @inject IJSRuntime JS
 
 <PageTitle>Drop Desk</PageTitle>
 
+<div class="crab-sea" aria-hidden="true"></div>
+<img class="mascot" src="img/mascot.svg" alt="" aria-hidden="true" />
+
 <div class="desk">
-    <section class="clock-panel is-@Watcher.Mode.ToString().ToLowerInvariant()">
-        <h1 class="brand">Drop Desk</h1>
-        <p class="mode">@ModeText</p>
-        <div class="clock" aria-live="off">@ClockText</div>
-        <p class="clock-sub">@ClockSub</p>
+    @* ---------- the big card: paste a link, get it in your cart ---------- *@
+    <section class="tcg-card hero is-@Watcher.Mode.ToString().ToLowerInvariant()">
+        <header class="card-head">
+            <span class="stage">@StageText</span>
+            <h1 class="card-name">Drop Desk</h1>
+            <span class="hp" title="Saved products live right now"><small>LIVE</small>@liveCount<small>/@items.Count</small></span>
+            <span class="energy energy-@EnergyFor(Watcher.Mode)" aria-hidden="true"></span>
+        </header>
+
+        <div class="art">
+            <p class="mode">@ModeText</p>
+            <div class="clock" aria-live="off">@ClockText</div>
+            <p class="clock-sub">@ClockSub</p>
+        </div>
+
+        <p class="card-strip">Pokémon on Target · Length: 1 click · Weight: your wallet</p>
 
         @if (Watcher.LastSuccess is { } win)
         {
             <div class="win" role="status">
                 <strong>In your cart: @win.Label</strong>
-                <span>Checkout is open in Chrome. Finish it there.</span>
+                <span>@(win.Note ?? "Checkout is open in Chrome. Finish it there, fast.")</span>
             </div>
         }
 
-        <div class="actions">
-            @if (Watcher.Mode == WatcherMode.Idle)
-            {
-                <button class="btn primary" disabled="@(items.Count == 0)" @onclick="Arm">Arm for @FormatTime(S.DropTime)</button>
-                <button class="btn" disabled="@(items.Count == 0)" @onclick="WatchNow">Watch now</button>
-            }
-            else
-            {
-                <button class="btn danger" @onclick="Watcher.Stop">Stop watching</button>
-            }
+        @* Attack 1: the main event *@
+        <div class="attack">
+            <div class="attack-cost" aria-hidden="true"><span class="energy energy-lightning"></span></div>
+            <div class="attack-body">
+                <h2>Quick Buy</h2>
+                <p>Paste a Pokémon product link from target.com. It adds to cart the instant it's live, then opens checkout.</p>
+                <div class="add-row">
+                    <input type="text" inputmode="url" placeholder="https://www.target.com/p/…/-/A-12345678" aria-label="Product link"
+                           @bind="newUrl" @bind:event="oninput" @onkeydown="OnKey" autofocus />
+                    <button class="btn primary" @onclick="BuyNow">Buy now</button>
+                </div>
+                <button class="link" @onclick="AddOnly">or just save it and track stock</button>
+                @if (addError is not null)
+                {
+                    <p class="error">@addError</p>
+                }
+            </div>
         </div>
-        <button class="link" @onclick="OpenLogin">Open Chrome to log in to Target</button>
+
+        @* Attack 2: the 3 AM drop *@
+        <div class="attack">
+            <div class="attack-cost" aria-hidden="true"><span class="energy energy-psychic"></span><span class="energy energy-psychic"></span></div>
+            <div class="attack-body">
+                <h2>Midnight Drop</h2>
+                <p>Starts refreshing @S.StartEarlyMinutes min early, keeps going @S.GiveUpAfterMinutes min after.</p>
+                <div class="actions">
+                    @if (Watcher.Mode == WatcherMode.Idle)
+                    {
+                        <button class="btn" disabled="@(items.Count == 0)" @onclick="Arm">Arm for @S.DropTimeValue.ToString("h:mm tt")</button>
+                        <button class="btn" disabled="@(items.Count == 0)" @onclick="WatchNow">Watch all saved now</button>
+                    }
+                    else
+                    {
+                        <button class="btn danger" @onclick="Watcher.Stop">Stop watching</button>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <footer class="card-foot">
+            <span><small>weakness</small> sold out ×2</span>
+            <span><small>resistance</small> scalpers −30</span>
+            <span><small>retreat</small> <button class="link" @onclick="OpenLogin">Log in to Target</button></span>
+        </footer>
     </section>
 
     <div class="side">
+        @* ---------- saved products with live/sold-out badges ---------- *@
         <section class="panel">
-            <h2>Products</h2>
-            <div class="add-row">
-                <input type="url" placeholder="Paste a target.com product link" aria-label="Product link"
-                       @bind="newUrl" @bind:event="oninput" @onkeydown="OnKey" />
-                <button class="btn" @onclick="AddUrl">Add</button>
+            <div class="panel-head">
+                <h2>Saved products <small>@liveCount live of @items.Count</small></h2>
+                <button class="btn small ghost" disabled="@(Stock.Running || items.Count == 0)" @onclick="CheckStock">
+                    @(Stock.Running ? "Checking…" : "Check stock now")
+                </button>
             </div>
-            @if (addError is not null)
-            {
-                <p class="error">@addError</p>
-            }
+            <p class="panel-sub">@StockSub</p>
 
             @if (items.Count == 0)
             {
-                <p class="empty">No products yet. Open the product on target.com, copy the link from the address bar, and paste it here.</p>
+                <p class="empty">No products yet. Open the Pokémon product on target.com, copy the link from the address bar, and paste it into Quick Buy.</p>
             }
             else
             {
-                <ul class="items">
+                <ul class="binder">
                     @foreach (var item in items)
                     {
-                        <li class="item">
-                            <div class="item-main">
-                                <a href="@item.Url" target="_blank" rel="noopener">@item.Label</a>
-                                <span class="meta">@ItemMeta(item)</span>
+                        var active = Watcher.IsActive(item);
+                        <li class="mini-card stock-@item.Stock.ToString().ToLowerInvariant() status-@item.Status.ToString().ToLowerInvariant() @(active ? "active" : "")">
+                            <div class="mini-top">
+                                <span class="stock-badge">@StockText(item)</span>
+                                @if (item.Price is not null)
+                                {
+                                    <span class="price">@item.Price</span>
+                                }
+                                <button class="icon" title="Remove" aria-label="Remove @item.Label" @onclick="() => Watcher.RemoveItem(item.Id)">✕</button>
                             </div>
-                            <span class="pill pill-@item.Status.ToString().ToLowerInvariant()">@StatusText(item.Status)</span>
-                            <button class="icon" title="Remove" aria-label="Remove @item.Label" @onclick="() => Watcher.RemoveItem(item.Id)">✕</button>
+                            <div class="mini-body">
+                                <div class="thumb">
+                                    @if (item.ImageUrl is not null)
+                                    {
+                                        <img src="@item.ImageUrl" alt="" loading="lazy" referrerpolicy="no-referrer" />
+                                    }
+                                    else
+                                    {
+                                        <span class="energy energy-@EnergyFor(item.Status)" aria-hidden="true"></span>
+                                    }
+                                </div>
+                                <div class="mini-text">
+                                    <a class="mini-name" href="@item.Url" target="_blank" rel="noopener" title="@item.Label">@item.Label</a>
+                                    <span class="meta">@ItemMeta(item)</span>
+                                </div>
+                            </div>
+                            @if (item.Note is not null)
+                            {
+                                <span class="note">@item.Note</span>
+                            }
+                            <div class="mini-foot">
+                                <span class="pill">@StatusText(item.Status)</span>
+                                @if (item.Status != ItemStatus.Added && !active)
+                                {
+                                    <button class="btn small primary" @onclick="() => BuyItem(item)">Buy now</button>
+                                }
+                            </div>
                         </li>
                     }
                 </ul>
@@ -75,34 +150,43 @@
             <div class="grid">
                 <label>
                     Drop time
-                    <input type="time" @bind="S.DropTime" @bind:after="Watcher.SaveSettings" />
+                    <input type="time" @bind="S.DropTimeValue" @bind:after="Watcher.SaveSettings" />
                 </label>
                 <label>
                     Refresh every (seconds)
-                    <input type="number" min="2" max="60" @bind="S.RefreshSeconds" @bind:after="Watcher.SaveSettings" />
+                    <input type="number" min="2" max="120" @bind="S.RefreshSeconds" @bind:after="Watcher.SaveSettings" />
                 </label>
                 <label>
                     Start this many minutes early
-                    <input type="number" min="0" max="60" @bind="S.StartEarlyMinutes" @bind:after="Watcher.SaveSettings" />
+                    <input type="number" min="0" max="120" @bind="S.StartEarlyMinutes" @bind:after="Watcher.SaveSettings" />
                 </label>
                 <label>
-                    Keep watching for (minutes)
-                    <input type="number" min="5" max="600" @bind="S.GiveUpAfterMinutes" @bind:after="Watcher.SaveSettings" />
+                    Keep trying for (minutes)
+                    <input type="number" min="1" max="720" @bind="S.GiveUpAfterMinutes" @bind:after="Watcher.SaveSettings" />
                 </label>
                 <label class="wide">
                     Phone alert topic (ntfy app)
                     <input type="text" placeholder="e.g. my-drop-alerts-4821" @bind="S.NtfyTopic" @bind:after="Watcher.SaveSettings" />
                     <small>Install the free ntfy app, subscribe to any unusual name, and enter the same name here.</small>
                 </label>
+                <label>
+                    Check stock every (minutes, 0 = off)
+                    <input type="number" min="0" max="120" @bind="S.StockCheckMinutes" @bind:after="Watcher.SaveSettings" />
+                </label>
+                <label class="check">
+                    <input type="checkbox" @bind="S.AutoBuyWhenLive" @bind:after="Watcher.SaveSettings" />
+                    When a saved product goes live, add it to cart automatically
+                </label>
                 <label class="check">
                     <input type="checkbox" @bind="S.OpenCheckout" @bind:after="Watcher.SaveSettings" />
                     Go straight to checkout after adding (otherwise open the cart)
                 </label>
             </div>
+            <p class="hint">"Keep trying" also applies to Quick Buy: if the item isn't live yet, it keeps refreshing that long.</p>
         </details>
 
         <section class="panel">
-            <h2>Activity</h2>
+            <h2>Battle log</h2>
             @{ var log = Watcher.Log; }
             @if (log.Count == 0)
             {
@@ -133,10 +217,9 @@
     {
         Watcher.Changed += OnChanged;
         Watcher.ItemAdded += OnItemAdded;
+        Watcher.ItemLive += OnItemLive;
         timer = new Timer(_ => OnChanged(), null, 1000, 1000);
     }
-
-    protected override void OnParametersSet() => items = Watcher.Items;
 
     protected override bool ShouldRender()
     {
@@ -152,10 +235,62 @@
         StateHasChanged();
     });
 
+    private void OnItemLive(WatchItem item) => _ = InvokeAsync(async () =>
+    {
+        try { await JS.InvokeVoidAsync("dropAlarm.live", item.Label); } catch { }
+        StateHasChanged();
+    });
+
+    private int liveCount => items.Count(i => i.Stock == StockState.Live);
+
+    private async Task CheckStock()
+    {
+        await UnlockSound();
+        Stock.CheckNow();
+    }
+
+    private string StockSub
+    {
+        get
+        {
+            if (Stock.Running) return "Checking each product now…";
+            if (S.StockCheckMinutes <= 0) return "Automatic stock checks are off (see Drop settings).";
+            if (!Browser.IsOpen) return "Automatic checks run while Drop Desk's Chrome is open. Hit \"Check stock now\" or \"Log in to Target\" to start.";
+            return Stock.NextSweep is { } next
+                ? $"Rechecks every {S.StockCheckMinutes} min while Chrome is open. Next at {next:h:mm tt}."
+                : $"Rechecks every {S.StockCheckMinutes} min while Chrome is open.";
+        }
+    }
+
+    private static string StockText(WatchItem i) => i.Stock switch
+    {
+        StockState.Live => "● LIVE",
+        StockState.SoldOut => "Sold out",
+        StockState.ComingSoon => "Coming soon",
+        StockState.Unavailable => "Not available",
+        _ => "Not checked"
+    };
+
+    private async Task BuyNow()
+    {
+        if (string.IsNullOrWhiteSpace(newUrl)) { addError = "Paste a product link first."; return; }
+        await UnlockSound();
+        addError = Watcher.BuyNow(newUrl);
+        if (addError is null) newUrl = "";
+    }
+
+    private void AddOnly()
+    {
+        if (string.IsNullOrWhiteSpace(newUrl)) { addError = "Paste a product link first."; return; }
+        addError = Watcher.AddItem(newUrl).error;
+        if (addError is null) newUrl = "";
+    }
+
+    private async Task BuyItem(WatchItem item) { await UnlockSound(); Watcher.BuyNow(item); }
     private async Task Arm() { await UnlockSound(); Watcher.Start(false); }
     private async Task WatchNow() { await UnlockSound(); Watcher.Start(true); }
 
-    // Browsers only allow sound after a click, so we "unlock" audio when you arm.
+    // Browsers only allow sound after a click, so we "unlock" audio on the button press.
     private async Task UnlockSound()
     {
         try { await JS.InvokeVoidAsync("dropAlarm.unlock"); } catch { }
@@ -167,23 +302,23 @@
         catch (Exception e) { Watcher.AddLog($"Couldn't open Chrome: {e.Message.Split('\n')[0]}"); }
     }
 
-    private void OnKey(KeyboardEventArgs e)
+    private async Task OnKey(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter") AddUrl();
+        if (e.Key == "Enter") await BuyNow();
     }
 
-    private void AddUrl()
+    private string StageText => Watcher.Mode switch
     {
-        if (string.IsNullOrWhiteSpace(newUrl)) return;
-        addError = Watcher.AddItem(newUrl);
-        if (addError is null) newUrl = "";
-    }
+        WatcherMode.Armed => "STAGE 1",
+        WatcherMode.Watching => "STAGE 2",
+        _ => "BASIC"
+    };
 
     private string ModeText => Watcher.Mode switch
     {
         WatcherMode.Armed => "Armed",
-        WatcherMode.Watching => "Watching",
-        _ => "Not armed"
+        WatcherMode.Watching => "Hunting",
+        _ => "Ready"
     };
 
     private string ClockText
@@ -193,9 +328,9 @@
             var now = DateTime.Now;
             return Watcher.Mode switch
             {
-                WatcherMode.Armed => Countdown(Watcher.DropAt - now),
+                WatcherMode.Armed => Countdown(Watcher.StartsAt > now ? Watcher.DropAt - now : TimeSpan.Zero),
                 WatcherMode.Watching => Countdown(now < Watcher.DropAt ? Watcher.DropAt - now : Watcher.GiveUpAt - now),
-                _ => FormatTime(S.DropTime)
+                _ => S.DropTimeValue.ToString("h:mm tt")
             };
         }
     }
@@ -205,18 +340,19 @@
         get
         {
             var now = DateTime.Now;
-            var pending = items.Count(i => i.Status != ItemStatus.Added);
+            var pending = items.Count(i => Watcher.IsActive(i) && i.Status != ItemStatus.Added);
+            var plural = pending == 1 ? "" : "s";
             return Watcher.Mode switch
             {
                 WatcherMode.Armed =>
                     $"Until the drop. Refreshing starts at {Watcher.StartsAt:h:mm tt}. Keep this computer awake.",
                 WatcherMode.Watching when now < Watcher.DropAt =>
-                    $"Until the drop. Already checking {pending} product{(pending == 1 ? "" : "s")} every {S.RefreshSeconds}s.",
+                    $"Until the drop. Already checking {pending} product{plural}.",
                 WatcherMode.Watching =>
-                    $"Left in the window. Checking {pending} product{(pending == 1 ? "" : "s")} every {S.RefreshSeconds}s.",
+                    $"Left before it gives up. Checking {pending} product{plural} every ~{S.RefreshSeconds}s.",
                 _ => items.Count == 0
-                    ? "Add a product link to get started."
-                    : $"Refreshing starts {S.StartEarlyMinutes} min early and runs {S.GiveUpAfterMinutes} min after."
+                    ? "Paste a link below to get started."
+                    : "Next drop time. Arm it, or hit Buy now on any card."
             };
         }
     }
@@ -227,11 +363,22 @@
         return $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}";
     }
 
-    private static string FormatTime(string hhmm) =>
-        TimeOnly.TryParse(hhmm, System.Globalization.CultureInfo.InvariantCulture, out var t) ? t.ToString("h:mm tt") : hhmm;
+    private static string ItemMeta(WatchItem i)
+    {
+        if (i.Checks > 0) return $"Watch checked {i.Checks}×, last {i.LastChecked:h:mm:ss tt}";
+        if (i.Stock == StockState.Live && i.LiveSince is { } since) return $"Live since {since:h:mm tt}";
+        if (i.StockCheckedAt is { } at) return $"Stock checked {Ago(at)}";
+        return "Stock not checked yet";
+    }
 
-    private static string ItemMeta(WatchItem i) =>
-        i.Checks == 0 ? "Not checked yet" : $"Checked {i.Checks} time{(i.Checks == 1 ? "" : "s")}, last at {i.LastChecked:h:mm:ss tt}";
+    private static string Ago(DateTime t)
+    {
+        var d = DateTime.Now - t;
+        if (d.TotalSeconds < 60) return "just now";
+        if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m ago";
+        if (d.TotalHours < 24) return $"{(int)d.TotalHours}h ago";
+        return t.ToString("MMM d");
+    }
 
     private static string StatusText(ItemStatus s) => s switch
     {
@@ -239,13 +386,30 @@
         ItemStatus.NotLive => "Not live",
         ItemStatus.Added => "In cart",
         ItemStatus.Failed => "Error",
-        _ => "Waiting"
+        _ => "Ready"
+    };
+
+    private static string EnergyFor(ItemStatus s) => s switch
+    {
+        ItemStatus.Checking => "lightning",
+        ItemStatus.Added => "grass",
+        ItemStatus.Failed => "fire",
+        ItemStatus.NotLive => "water",
+        _ => "colorless"
+    };
+
+    private static string EnergyFor(WatcherMode m) => m switch
+    {
+        WatcherMode.Armed => "psychic",
+        WatcherMode.Watching => "lightning",
+        _ => "colorless"
     };
 
     public void Dispose()
     {
         Watcher.Changed -= OnChanged;
         Watcher.ItemAdded -= OnItemAdded;
+        Watcher.ItemLive -= OnItemLive;
         timer?.Dispose();
     }
 }

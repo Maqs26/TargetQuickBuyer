@@ -1,6 +1,12 @@
+using System.Globalization;
+using System.Text.Json.Serialization;
+
 namespace TargetDrop.Services;
 
 public enum ItemStatus { Waiting, Checking, NotLive, Added, Failed }
+
+/// <summary>What the product page says right now, from the background stock checker.</summary>
+public enum StockState { Unknown, Live, SoldOut, ComingSoon, Unavailable }
 
 public class WatchItem
 {
@@ -10,6 +16,15 @@ public class WatchItem
     public ItemStatus Status { get; set; } = ItemStatus.Waiting;
     public DateTime? LastChecked { get; set; }
     public int Checks { get; set; }
+
+    /// <summary>Last thing worth telling you about this item (purchase limit, refused add, etc.).</summary>
+    public string? Note { get; set; }
+
+    public StockState Stock { get; set; } = StockState.Unknown;
+    public DateTime? StockCheckedAt { get; set; }
+    public DateTime? LiveSince { get; set; }
+    public string? Price { get; set; }
+    public string? ImageUrl { get; set; }
 }
 
 public class DropSettings
@@ -20,6 +35,20 @@ public class DropSettings
     public int RefreshSeconds { get; set; } = 6;
     public string NtfyTopic { get; set; } = "";
     public bool OpenCheckout { get; set; } = true;
+
+    /// <summary>How often the background checker looks at every saved product. 0 turns it off.</summary>
+    public int StockCheckMinutes { get; set; } = 2;
+
+    /// <summary>When the stock checker sees a saved product go live, go for the cart automatically.</summary>
+    public bool AutoBuyWhenLive { get; set; }
+
+    /// <summary>DropTime as a TimeOnly, for the time picker. Falls back to 3:00 AM if the saved value is bad.</summary>
+    [JsonIgnore]
+    public TimeOnly DropTimeValue
+    {
+        get => TimeOnly.TryParse(DropTime, CultureInfo.InvariantCulture, out var t) ? t : new TimeOnly(3, 0);
+        set => DropTime = value.ToString("HH:mm", CultureInfo.InvariantCulture);
+    }
 }
 
 public class SavedState

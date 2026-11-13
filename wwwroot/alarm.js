@@ -9,6 +9,41 @@ window.dropAlarm = {
     } catch { /* no audio available */ }
   },
 
+  // A saved product just went live (softer, rising chirps).
+  live(label) {
+    this.unlock();
+    const c = this.ctx;
+    if (c) {
+      for (let i = 0; i < 9; i++) {
+        const t = c.currentTime + i * 0.18 + Math.floor(i / 3) * 0.4;
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = [660, 880, 1175][i % 3];
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(0.3, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+        osc.connect(gain).connect(c.destination);
+        osc.start(t);
+        osc.stop(t + 0.18);
+      }
+    }
+    this.flash("LIVE NOW — " + label);
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification("Live on Target", { body: label });
+    }
+  },
+
+  flash(text) {
+    const original = "Drop Desk";
+    let on = false, n = 0;
+    clearInterval(this.flashTimer);
+    this.flashTimer = setInterval(() => {
+      document.title = (on = !on) ? text : original;
+      if (++n > 40) { clearInterval(this.flashTimer); document.title = original; }
+    }, 700);
+  },
+
   ring(label) {
     this.unlock();
     const c = this.ctx;
@@ -29,13 +64,7 @@ window.dropAlarm = {
     }
 
     // Flash the tab title so it stands out in the tab bar.
-    const original = "Drop Desk";
-    let on = false, n = 0;
-    clearInterval(this.flashTimer);
-    this.flashTimer = setInterval(() => {
-      document.title = (on = !on) ? "IN CART — CHECK OUT" : original;
-      if (++n > 40) { clearInterval(this.flashTimer); document.title = original; }
-    }, 700);
+    this.flash("IN CART — CHECK OUT");
 
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification("In your cart", { body: `${label}. Checkout is open in Chrome.` });

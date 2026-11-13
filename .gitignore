@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Drop Desk: your logged-in Chrome profile (cookies!) and local list
+chrome-profile/
+watchlist.json

@@ -29,6 +29,15 @@ public class StateStore
         {
             State = new();
         }
+
+        // A fresh run doesn't know what's in your cart; start every product from "Ready".
+        // Stock readings (Live / Sold out) are kept so the list isn't blank until the first check.
+        foreach (var i in State.Items)
+        {
+            i.Status = ItemStatus.Waiting;
+            i.Checks = 0;
+            i.Note = null;
+        }
     }
 
     public void Save()

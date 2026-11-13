@@ -1,44 +1,65 @@
 # Drop Desk
 
-A small local app for Target drops. Paste product links, arm it for 3:00 AM, and it
-refreshes the pages in your own Chrome. The moment "Add to cart" goes live it clicks it,
-opens checkout, plays an alarm, flashes the tab and (optionally) pushes to your phone.
+A small local app for grabbing Pokémon products on Target the second they drop.
+
+Paste a target.com product link and hit **Buy now**. It clicks "Add to cart" in your own
+logged-in Chrome as soon as the button is live, confirms Target accepted it, and opens checkout.
 You place the order yourself.
 
+Saved links get a live badge (**LIVE** / Sold out / Coming soon) from a background stock checker,
+so you can see at a glance what's buyable.
+
 ## Requirements
-- .NET 8 SDK (https://dotnet.microsoft.com/download). On .NET 9, change `net8.0` to `net9.0` in TargetDrop.csproj.
+- .NET 8 SDK (https://dotnet.microsoft.com/download).
 - Google Chrome installed.
 
 ## Run it
 ```
 cd DropDesk
-dotnet run
+dotnet run --project TargetDrop.csproj
 ```
-Open http://localhost:5080.
+Or open `DropDesk.sln` in Visual Studio and press F5. The app opens at http://localhost:5080.
+If that port is taken: `dotnet run --project TargetDrop.csproj -- --urls http://localhost:5090`.
 
-If Playwright complains about missing browsers or a driver, run this once after building:
+If Playwright complains about a missing driver, run this once after building:
 ```
 pwsh bin/Debug/net8.0/playwright.ps1 install chrome
 ```
-(On macOS/Linux without PowerShell: `dotnet tool install --global PowerShell`, then run the line above.)
 
 ## First-time setup
-1. Click **Open Chrome to log in to Target**. A separate Chrome window opens with its own profile.
-   Log in, and make sure a default shipping address and card are saved. This profile is
-   kept in `./chrome-profile`, so you only do this once.
-2. Paste one or more product links (copied from the product page address bar) and click **Add**.
-3. Optional: in **Drop settings**, add an ntfy topic for phone alerts (install the free ntfy app and subscribe to the same name).
-4. Test it: add an item that is in stock right now and click **Watch now**. It should add to cart and open checkout.
+1. Click **Log in to Target** (bottom of the big card). A separate Chrome window opens with its
+   own profile. Log in, and make sure a default shipping address and card are saved. The profile
+   lives in `./chrome-profile` (git-ignored), so you only do this once.
+2. Paste a product link (copy it from the product page's address bar):
+   - **Buy now**: goes for the cart immediately. If it isn't live yet, it keeps refreshing until it
+     is, for up to the "Keep trying" window in Drop settings (default 90 min).
+   - **or just save it and track stock**: adds it to **Saved products**, where the stock checker
+     keeps its badge up to date.
+3. Optional: in **Drop settings**, add an ntfy topic for phone alerts (install the free ntfy app and
+   subscribe to the same name).
+4. Test it with something cheap that's in stock: **Buy now** should add it and open checkout.
    Remove it from your cart afterwards.
 
+## Stock badges
+- Checks every saved product every 2 minutes (change it in Drop settings, 0 = off) **while Drop
+  Desk's Chrome is open**. It never pops Chrome open on its own. **Check stock now** opens it.
+- When something flips to **LIVE**, the card glows, you get a chime, a desktop notification and a
+  phone push. Tick *"When a saved product goes live, add it to cart automatically"* to have it go
+  straight for the cart.
+- Products a watch is already refreshing are skipped by the checker.
+
 ## Drop night
-- Click **Arm for 3:00 AM** and leave the app tab and Chrome open.
-- Turn off sleep on your computer and keep it plugged in.
-- Drop time uses your computer's local clock. Adjust it if the drop is in another time zone.
+- Click **Arm for 3:00 AM** to watch every saved product from a few minutes before the drop.
+  Leave the app tab and Chrome open, turn off sleep, keep the computer plugged in.
+- Drop time uses your computer's local clock.
 
 ## Notes
-- Your list and settings are saved in `watchlist.json`.
-- Keep the refresh delay at 5 seconds or more. Hammering the page gets your browser rate-limited,
-  which the app detects and backs off from for 60 seconds.
-- If Target changes its page and the button stops being found, the selector lives in
-  `Services/DropWatcher.cs` in `TryAddAsync`.
+- Your list and settings are saved in `watchlist.json` (git-ignored).
+- Keep the refresh delay at 5 seconds or more. Hammering Target gets your browser rate-limited;
+  the app notices and backs off for 60 seconds.
+- Watch tabs skip images and fonts so reloads are fast. Your checkout tab loads normally.
+- Pre-order buttons count as live.
+- If Target changes its page and the button stops being found, the selectors are at the top of
+  `Services/DropWatcher.cs` (`AddToCartSelector`, plus the sold-out and coming-soon text patterns).
+- This is browser automation on Target's site, which Target's terms of use don't allow. Use it
+  at a human pace for your own purchases.
