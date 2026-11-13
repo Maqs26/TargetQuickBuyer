@@ -1,0 +1,251 @@
+@page "/"
+@implements IDisposable
+@inject DropWatcher Watcher
+@inject BrowserManager Browser
+@inject IJSRuntime JS
+
+<PageTitle>Drop Desk</PageTitle>
+
+<div class="desk">
+    <section class="clock-panel is-@Watcher.Mode.ToString().ToLowerInvariant()">
+        <h1 class="brand">Drop Desk</h1>
+        <p class="mode">@ModeText</p>
+        <div class="clock" aria-live="off">@ClockText</div>
+        <p class="clock-sub">@ClockSub</p>
+
+        @if (Watcher.LastSuccess is { } win)
+        {
+            <div class="win" role="status">
+                <strong>In your cart: @win.Label</strong>
+                <span>Checkout is open in Chrome. Finish it there.</span>
+            </div>
+        }
+
+        <div class="actions">
+            @if (Watcher.Mode == WatcherMode.Idle)
+            {
+                <button class="btn primary" disabled="@(items.Count == 0)" @onclick="Arm">Arm for @FormatTime(S.DropTime)</button>
+                <button class="btn" disabled="@(items.Count == 0)" @onclick="WatchNow">Watch now</button>
+            }
+            else
+            {
+                <button class="btn danger" @onclick="Watcher.Stop">Stop watching</button>
+            }
+        </div>
+        <button class="link" @onclick="OpenLogin">Open Chrome to log in to Target</button>
+    </section>
+
+    <div class="side">
+        <section class="panel">
+            <h2>Products</h2>
+            <div class="add-row">
+                <input type="url" placeholder="Paste a target.com product link" aria-label="Product link"
+                       @bind="newUrl" @bind:event="oninput" @onkeydown="OnKey" />
+                <button class="btn" @onclick="AddUrl">Add</button>
+            </div>
+            @if (addError is not null)
+            {
+                <p class="error">@addError</p>
+            }
+
+            @if (items.Count == 0)
+            {
+                <p class="empty">No products yet. Open the product on target.com, copy the link from the address bar, and paste it here.</p>
+            }
+            else
+            {
+                <ul class="items">
+                    @foreach (var item in items)
+                    {
+                        <li class="item">
+                            <div class="item-main">
+                                <a href="@item.Url" target="_blank" rel="noopener">@item.Label</a>
+                                <span class="meta">@ItemMeta(item)</span>
+                            </div>
+                            <span class="pill pill-@item.Status.ToString().ToLowerInvariant()">@StatusText(item.Status)</span>
+                            <button class="icon" title="Remove" aria-label="Remove @item.Label" @onclick="() => Watcher.RemoveItem(item.Id)">✕</button>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+
+        <details class="panel settings">
+            <summary>Drop settings</summary>
+            <div class="grid">
+                <label>
+                    Drop time
+                    <input type="time" @bind="S.DropTime" @bind:after="Watcher.SaveSettings" />
+                </label>
+                <label>
+                    Refresh every (seconds)
+                    <input type="number" min="2" max="60" @bind="S.RefreshSeconds" @bind:after="Watcher.SaveSettings" />
+                </label>
+                <label>
+                    Start this many minutes early
+                    <input type="number" min="0" max="60" @bind="S.StartEarlyMinutes" @bind:after="Watcher.SaveSettings" />
+                </label>
+                <label>
+                    Keep watching for (minutes)
+                    <input type="number" min="5" max="600" @bind="S.GiveUpAfterMinutes" @bind:after="Watcher.SaveSettings" />
+                </label>
+                <label class="wide">
+                    Phone alert topic (ntfy app)
+                    <input type="text" placeholder="e.g. my-drop-alerts-4821" @bind="S.NtfyTopic" @bind:after="Watcher.SaveSettings" />
+                    <small>Install the free ntfy app, subscribe to any unusual name, and enter the same name here.</small>
+                </label>
+                <label class="check">
+                    <input type="checkbox" @bind="S.OpenCheckout" @bind:after="Watcher.SaveSettings" />
+                    Go straight to checkout after adding (otherwise open the cart)
+                </label>
+            </div>
+        </details>
+
+        <section class="panel">
+            <h2>Activity</h2>
+            @{ var log = Watcher.Log; }
+            @if (log.Count == 0)
+            {
+                <p class="empty">Nothing has happened yet.</p>
+            }
+            else
+            {
+                <ul class="log">
+                    @foreach (var line in log)
+                    {
+                        <li>@line</li>
+                    }
+                </ul>
+            }
+        </section>
+    </div>
+</div>
+
+@code {
+    private string newUrl = "";
+    private string? addError;
+    private List<WatchItem> items = new();
+    private Timer? timer;
+
+    private DropSettings S => Watcher.Settings;
+
+    protected override void OnInitialized()
+    {
+        Watcher.Changed += OnChanged;
+        Watcher.ItemAdded += OnItemAdded;
+        timer = new Timer(_ => OnChanged(), null, 1000, 1000);
+    }
+
+    protected override void OnParametersSet() => items = Watcher.Items;
+
+    protected override bool ShouldRender()
+    {
+        items = Watcher.Items;
+        return true;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnItemAdded(WatchItem item) => _ = InvokeAsync(async () =>
+    {
+        try { await JS.InvokeVoidAsync("dropAlarm.ring", item.Label); } catch { }
+        StateHasChanged();
+    });
+
+    private async Task Arm() { await UnlockSound(); Watcher.Start(false); }
+    private async Task WatchNow() { await UnlockSound(); Watcher.Start(true); }
+
+    // Browsers only allow sound after a click, so we "unlock" audio when you arm.
+    private async Task UnlockSound()
+    {
+        try { await JS.InvokeVoidAsync("dropAlarm.unlock"); } catch { }
+    }
+
+    private async Task OpenLogin()
+    {
+        try { await Browser.OpenLoginAsync(); }
+        catch (Exception e) { Watcher.AddLog($"Couldn't open Chrome: {e.Message.Split('\n')[0]}"); }
+    }
+
+    private void OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") AddUrl();
+    }
+
+    private void AddUrl()
+    {
+        if (string.IsNullOrWhiteSpace(newUrl)) return;
+        addError = Watcher.AddItem(newUrl);
+        if (addError is null) newUrl = "";
+    }
+
+    private string ModeText => Watcher.Mode switch
+    {
+        WatcherMode.Armed => "Armed",
+        WatcherMode.Watching => "Watching",
+        _ => "Not armed"
+    };
+
+    private string ClockText
+    {
+        get
+        {
+            var now = DateTime.Now;
+            return Watcher.Mode switch
+            {
+                WatcherMode.Armed => Countdown(Watcher.DropAt - now),
+                WatcherMode.Watching => Countdown(now < Watcher.DropAt ? Watcher.DropAt - now : Watcher.GiveUpAt - now),
+                _ => FormatTime(S.DropTime)
+            };
+        }
+    }
+
+    private string ClockSub
+    {
+        get
+        {
+            var now = DateTime.Now;
+            var pending = items.Count(i => i.Status != ItemStatus.Added);
+            return Watcher.Mode switch
+            {
+                WatcherMode.Armed =>
+                    $"Until the drop. Refreshing starts at {Watcher.StartsAt:h:mm tt}. Keep this computer awake.",
+                WatcherMode.Watching when now < Watcher.DropAt =>
+                    $"Until the drop. Already checking {pending} product{(pending == 1 ? "" : "s")} every {S.RefreshSeconds}s.",
+                WatcherMode.Watching =>
+                    $"Left in the window. Checking {pending} product{(pending == 1 ? "" : "s")} every {S.RefreshSeconds}s.",
+                _ => items.Count == 0
+                    ? "Add a product link to get started."
+                    : $"Refreshing starts {S.StartEarlyMinutes} min early and runs {S.GiveUpAfterMinutes} min after."
+            };
+        }
+    }
+
+    private static string Countdown(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        return $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}";
+    }
+
+    private static string FormatTime(string hhmm) =>
+        TimeOnly.TryParse(hhmm, System.Globalization.CultureInfo.InvariantCulture, out var t) ? t.ToString("h:mm tt") : hhmm;
+
+    private static string ItemMeta(WatchItem i) =>
+        i.Checks == 0 ? "Not checked yet" : $"Checked {i.Checks} time{(i.Checks == 1 ? "" : "s")}, last at {i.LastChecked:h:mm:ss tt}";
+
+    private static string StatusText(ItemStatus s) => s switch
+    {
+        ItemStatus.Checking => "Checking",
+        ItemStatus.NotLive => "Not live",
+        ItemStatus.Added => "In cart",
+        ItemStatus.Failed => "Error",
+        _ => "Waiting"
+    };
+
+    public void Dispose()
+    {
+        Watcher.Changed -= OnChanged;
+        Watcher.ItemAdded -= OnItemAdded;
+        timer?.Dispose();
+    }
+}
